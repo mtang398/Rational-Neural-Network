@@ -14,28 +14,6 @@ https://github.com/ml-research/rational_activations
 
 Follow their setup / install instructions to enable rational activations in our scripts (we intentionally do **not** provide a one-line `pip install ...` here because the upstream project documents the correct setup).
 
-## Environment setup (non-trivial installs)
-
-These scripts assume you already have a working Python environment and a compatible PyTorch install.
-
-### PyTorch
-Install PyTorch following the official instructions for your OS/CUDA version:
-- https://pytorch.org/get-started/locally/
-
-### Vision models + datasets
-```bash
-pip install timm datasets torchvision
-```
-
-### Offline RL (MuJoCo + Minari)
-```bash
-pip install gymnasium minari mujoco
-```
-
-Notes:
-- `mujoco` may require system-specific dependencies (see Gymnasium/MuJoCo docs if you hit install/runtime issues).
-- Some scripts also use plotting/tabulation libraries; install them only if you run the table/figure scripts.
-
 ## What’s in this repo
 
 - `cifar_test_naive.py`  
@@ -64,57 +42,7 @@ Notes:
 
 ## Quickstart
 
-Most scripts are “edit constants at the top, then run the file”.
-
-### CIFAR-10 (plain)
-1. Edit paths and experiment knobs in `cifar_test_naive.py`
-2. Run:
-```bash
-python cifar_test_naive.py
-```
-
-### CIFAR-10 (boosted)
-1. Edit paths / knobs in `cifar_test_boosted.py`
-2. Run:
-```bash
-python cifar_test_boosted.py
-```
-
-### Tiny-ImageNet
-1. Edit `DATA_ROOT` / `OUT_ROOT`, model list, and activation selection in `imagenet_test.py`
-2. Run:
-```bash
-python imagenet_test.py
-```
-
-### Offline RL (Minari)
-1. Edit task list / output root / hyperparameters in `RL_test.py`
-2. Run:
-```bash
-python RL_test.py
-```
-
-## Summaries / tables / plots
-
-### CIFAR summaries
-```bash
-python cifar_table.py
-```
-
-### Tiny-ImageNet summaries
-```bash
-python table_imagenet.py
-```
-
-### Offline RL summaries
-```bash
-python table_RL.py
-```
-
-## Notes
-
-- Run directory names encode model/activation variants so the table scripts can parse them consistently.
-- If you add new activation variants, update the parsing rules in the corresponding `table_*.py` script.
+All scripts are “edit constants at the top, then run the file”.
 
 ## Acknowledgements
 
