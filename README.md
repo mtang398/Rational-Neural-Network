@@ -12,7 +12,7 @@ We use the rational activation implementation from:
 
 https://github.com/ml-research/rational_activations
 
-Follow their setup / install instructions to enable rational activations in our scripts (we intentionally do **not** provide a one-line `pip install ...` here because the upstream project documents the correct setup).
+Follow their setup / install instructions to enable rational activations in our scripts
 
 ## What’s in this repo
 
