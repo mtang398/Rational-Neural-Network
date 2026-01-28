@@ -5,7 +5,10 @@ This script:
 - Loads "zh-plus/tiny-imagenet" via datasets.load_dataset with caches under DATA_ROOT.
 - Wraps HF splits into a PyTorch Dataset that converts images to RGB and applies torchvision transforms.
 - Trains a timm model from scratch for NUM_CLASSES with optional repeated-augmentation sampling.
-- Supports ACTIVATION in {"gelu", "rational"} by replacing nn.GELU modules with a Rational module wrapper.
+- Supports ACTIVATION in {"gelu", "relu", "rational"}:
+  - "gelu": keep model default (GELU)
+  - "relu": replace GELU modules with ReLU
+  - "rational": replace GELU modules with a Rational module wrapper
 - Optionally wraps ViT block LayerNorm modules and forces them disabled when using Rational.
 - Uses AdamW with per-group weight decay rules and an optional separate param-group for Rational params.
 - Uses cosine LR with warmup computed per training step, optional Mixup/CutMix, optional EMA, and optional AMP.
@@ -281,6 +284,34 @@ class RepeatAugSampler(Sampler[int]):
         return iter(expanded)
 
 
+_TIMM_GELU = None
+try:
+    from timm.layers import GELU as _TimmGELU  # type: ignore
+    _TIMM_GELU = _TimmGELU
+except Exception:
+    _TIMM_GELU = None
+
+
+def _is_gelu_module(m: nn.Module) -> bool:
+    if isinstance(m, nn.GELU):
+        return True
+    if _TIMM_GELU is not None and isinstance(m, _TIMM_GELU):
+        return True
+    return False
+
+
+def replace_gelu_with_relu(module: nn.Module) -> int:
+    """Recursively replace GELU-like submodules with nn.ReLU(inplace=False)."""
+    count = 0
+    for name, child in module.named_children():
+        if _is_gelu_module(child):
+            setattr(module, name, nn.ReLU(inplace=False))
+            count += 1
+        else:
+            count += replace_gelu_with_relu(child)
+    return count
+
+
 class ToggleLayerNorm(nn.Module):
     """LayerNorm wrapper that can bypass normalization when enabled=False."""
     def __init__(self, ln: nn.LayerNorm, enabled: bool = True):
@@ -328,6 +359,7 @@ def set_vit_block_norms_enabled(model: nn.Module, enabled: bool) -> int:
 
 
 USE_RATIONAL_ACTIVATION = (ACTIVATION.lower() == "rational")
+USE_RELU_ACTIVATION = (ACTIVATION.lower() == "relu")
 
 Rational = None
 if USE_RATIONAL_ACTIVATION:
@@ -683,6 +715,10 @@ def run_single_model(
             c1, c2 = wrap_vit_block_norms_for_warmup(model, enabled=False)
             print(f"[MODEL] Disabled block.norm1 in {c1} blocks and block.norm2 in {c2} blocks (always).")
 
+    elif USE_RELU_ACTIVATION:
+        n_rep = replace_gelu_with_relu(model)
+        print(f"[MODEL] Replaced {n_rep} GELU modules with ReLU.")
+
     model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
@@ -691,8 +727,10 @@ def run_single_model(
         print("[MODEL] Activation inside ViT MLP blocks is Rational initialized to GELU (norm1/norm2 disabled).")
     elif USE_RATIONAL_ACTIVATION:
         print("[MODEL] Activation inside ViT MLP blocks is Rational initialized to GELU.")
+    elif USE_RELU_ACTIVATION:
+        print("[MODEL] Activation inside ViT MLP blocks is ReLU (GELU replaced).")
     else:
-        print("[MODEL] Activation inside ViT MLP blocks is GELU (standard ViT).")
+        print("[MODEL] Activation inside ViT MLP blocks is GELU (standard timm model).")
 
     ema = ModelEMA(model, EMA_DECAY) if USE_EMA else None
 
@@ -867,8 +905,8 @@ def run_single_model(
 
 
 def main() -> None:
-    if ACTIVATION.lower() not in ["gelu", "rational"]:
-        raise ValueError("ACTIVATION must be either 'gelu' or 'rational'.")
+    if ACTIVATION.lower() not in ["gelu", "relu", "rational"]:
+        raise ValueError("ACTIVATION must be either 'gelu', 'relu', or 'rational'.")
 
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
