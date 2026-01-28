@@ -23,9 +23,6 @@ MobileNetV2:
 
 Runs are saved under:
   OUT_ROOT/cifar10_<model>_plain_<activation>/seed_<seed>/
-
-NEW (same idea as in RL_test.py):
-  - RATIONAL_LR_MULT: apply a separate LR multiplier to Rational activation coefficients (default 1.0 => identical training)
 """
 
 import os
@@ -55,9 +52,7 @@ OUT_ROOT     = r"D:\runs\rational_cifar10"       # change if needed
 
 # Plain VGG4 or VGG8 or MobileNetV2 (edit MODEL to switch)
 MODEL        = "vgg8"  # "vgg4" or "vgg8" or "mobilenet_v2"
-
-# IMPORTANT: this must be a tuple of activation strings (comma matters!)
-ACTIVATIONS  = ("rational_leaky_relu",)  # e.g., ("relu", "gelu", "rational_gelu")
+ACTIVATIONS  = ("rational_leaky_relu")
 
 EPOCHS       = 60
 BATCH_SIZE   = 128
@@ -73,15 +68,11 @@ SEED0        = 0
 
 SAVE_METRICS = True
 
-# NEW: LR multiplier for Rational activation coefficients (default 1.0 => identical training)
-RATIONAL_LR_MULT = 1.0  # set to e.g. 4.0 to use 4x LR on Rational coeffs
-
 
 # -------------------------
 # Helpers (Windows drive guard)
 # -------------------------
 def ensure_not_c_drive(path: str) -> None:
-    """Refuse to use a C: drive path on Windows (to avoid filling system disk)."""
     if os.name == "nt":
         drive, _ = os.path.splitdrive(os.path.abspath(path))
         if drive.upper() == "C:":
@@ -90,16 +81,12 @@ def ensure_not_c_drive(path: str) -> None:
                 f"Set DATA_ROOT/OUT_ROOT to a non-C drive (e.g., D:\\datasets, D:\\runs)."
             )
 
-
 def mkdir(path: str) -> str:
-    """Create a directory (and guard against C: drive on Windows)."""
     ensure_not_c_drive(path)
     os.makedirs(path, exist_ok=True)
     return path
 
-
 def set_seed(seed: int) -> None:
-    """Seed Python/NumPy/PyTorch RNGs and force deterministic cuDNN behavior."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -107,9 +94,7 @@ def set_seed(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-
 def count_params(model: nn.Module) -> int:
-    """Count total parameters in a model."""
     return sum(p.numel() for p in model.parameters())
 
 
@@ -140,9 +125,7 @@ SUPPORTED_MODELS = tuple(list(MODEL_CFGS.keys()) + ["mobilenet_v2"])
 # Activations
 # -------------------------
 def make_activation(act: str) -> nn.Module:
-    """Factory for activation modules used in VGG and in MobileNetV2 activation swapping."""
     a = act.lower()
-
     if a == "gelu":
         return nn.GELU()
     if a in ("swish", "silu"):
@@ -151,99 +134,19 @@ def make_activation(act: str) -> nn.Module:
         return nn.LeakyReLU(negative_slope=0.01, inplace=True)
     if a == "relu":
         return nn.ReLU(inplace=True)
-
-    # Rational init targets
     if a == "rational_leaky_relu":
         return Rational(approx_func="leaky_relu")
     if a == "rational_swish":
         return Rational(approx_func="swish")
     if a == "rational_gelu":
         return Rational(approx_func="gelu")
-
     raise ValueError(f"Unknown activation={act}")
-
-
-# -------------------------
-# Optimizer helper: give Rational coeffs a different LR (default 1.0 => identical)
-# -------------------------
-def _unique_params_in_order(params: List[nn.Parameter]) -> List[nn.Parameter]:
-    """Deduplicate parameters while preserving their first-seen order."""
-    seen = set()
-    out = []
-    for p in params:
-        pid = id(p)
-        if pid in seen:
-            continue
-        seen.add(pid)
-        out.append(p)
-    return out
-
-
-def _split_rational_params(model: nn.Module) -> Tuple[List[nn.Parameter], List[nn.Parameter]]:
-    """
-    Split model parameters into (base_params, rational_params) by detecting Rational submodules.
-    """
-    all_params = _unique_params_in_order(list(model.parameters()))
-
-    rat_ids = set()
-    for sub in model.modules():
-        if isinstance(sub, Rational):
-            for p in sub.parameters():
-                rat_ids.add(id(p))
-
-    rat_params = [p for p in all_params if id(p) in rat_ids]
-    base_params = [p for p in all_params if id(p) not in rat_ids]
-    return base_params, rat_params
-
-
-def build_optimizer(model: nn.Module) -> optim.Optimizer:
-    """
-    Build the SGD optimizer. If RATIONAL_LR_MULT != 1.0 and Rational activations exist,
-    use two param groups so Rational coeffs get a scaled LR.
-    """
-    lr_mult = float(RATIONAL_LR_MULT)
-
-    if lr_mult == 1.0:
-        return optim.SGD(
-            model.parameters(),
-            lr=LR,
-            momentum=MOMENTUM,
-            weight_decay=WEIGHT_DECAY,
-            nesterov=NESTEROV,
-        )
-
-    base_params, rat_params = _split_rational_params(model)
-
-    if len(rat_params) == 0:
-        return optim.SGD(
-            model.parameters(),
-            lr=LR,
-            momentum=MOMENTUM,
-            weight_decay=WEIGHT_DECAY,
-            nesterov=NESTEROV,
-        )
-
-    return optim.SGD(
-        [
-            {"params": base_params, "lr": LR},
-            {"params": rat_params, "lr": LR * lr_mult},
-        ],
-        momentum=MOMENTUM,
-        weight_decay=WEIGHT_DECAY,
-        nesterov=NESTEROV,
-    )
 
 
 # -------------------------
 # Model (plain VGG for CIFAR)
 # -------------------------
 class VGGCIFARSmall(nn.Module):
-    """
-    Plain VGG-style CNN for CIFAR-10:
-      - conv -> activation repeated per block
-      - maxpool after each block
-      - final linear classifier (no BN/dropout)
-    """
     def __init__(
         self,
         cfg: List[Tuple[int, int, int]],
@@ -300,13 +203,11 @@ def replace_relu_modules_inplace(module: nn.Module, activation: str) -> None:
 
 
 def build_model(model_name: str, activation: str, num_classes: int = 10) -> nn.Module:
-    """Construct the requested model and apply the requested activation policy."""
     if model_name in MODEL_CFGS:
         return VGGCIFARSmall(cfg=MODEL_CFGS[model_name], activation=activation, num_classes=num_classes)
 
     if model_name == "mobilenet_v2":
         m = torchvision.models.mobilenet_v2(weights=None)
-
         # Adapt classifier to CIFAR-10
         if not hasattr(m, "classifier") or not isinstance(m.classifier, nn.Sequential) or len(m.classifier) < 2:
             raise RuntimeError("Unexpected torchvision MobileNetV2 structure (classifier).")
@@ -324,8 +225,7 @@ def build_model(model_name: str, activation: str, num_classes: int = 10) -> nn.M
 # -------------------------
 # Data (plain: no augmentation)
 # -------------------------
-def build_transforms():
-    """Return train/test transforms (no augmentation, only normalization)."""
+def build_transforms() -> Tuple[nn.Module, nn.Module]:
     train_tf = T.Compose([
         T.ToTensor(),
         T.Normalize(CIFAR10_MEAN, CIFAR10_STD),
@@ -336,9 +236,7 @@ def build_transforms():
     ])
     return train_tf, test_tf
 
-
 def build_loaders(data_root: str, batch_size: int, num_workers: int, use_cuda: bool):
-    """Build CIFAR-10 train/test loaders under a guarded data_root."""
     train_tf, test_tf = build_transforms()
     tv_root = mkdir(os.path.join(data_root, "torchvision"))
 
@@ -361,7 +259,6 @@ def build_loaders(data_root: str, batch_size: int, num_workers: int, use_cuda: b
 # -------------------------
 @torch.no_grad()
 def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tuple[float, float]:
-    """Evaluate cross-entropy loss and top-1 accuracy."""
     model.eval()
     correct = 0
     total = 0
@@ -378,8 +275,17 @@ def evaluate(model: nn.Module, loader: DataLoader, device: torch.device) -> Tupl
     return loss_sum / max(1, total), correct / max(1, total)
 
 
+def build_optimizer(model: nn.Module) -> optim.Optimizer:
+    return optim.SGD(
+        model.parameters(),
+        lr=LR,
+        momentum=MOMENTUM,
+        weight_decay=WEIGHT_DECAY,
+        nesterov=NESTEROV,
+    )
+
+
 def train_one_run(run_seed: int, activation: str) -> Dict[str, Any]:
-    """Train a single (model, activation, seed) run and save best checkpoint by test accuracy."""
     set_seed(run_seed)
 
     if MODEL not in SUPPORTED_MODELS:
@@ -465,7 +371,6 @@ def train_one_run(run_seed: int, activation: str) -> Dict[str, Any]:
                 "test_acc": float(test_acc),
                 "epoch_time_sec": float(epoch_time),
                 "n_params": int(n_params),
-                "rational_lr_mult": float(RATIONAL_LR_MULT),
             }
 
             if log_f is not None:
@@ -507,7 +412,6 @@ def train_one_run(run_seed: int, activation: str) -> Dict[str, Any]:
                             "WEIGHT_DECAY": WEIGHT_DECAY,
                             "NESTEROV": NESTEROV,
                             "NUM_WORKERS": NUM_WORKERS,
-                            "RATIONAL_LR_MULT": float(RATIONAL_LR_MULT),
                         },
                         "seed": run_seed,
                     },
@@ -536,7 +440,6 @@ def train_one_run(run_seed: int, activation: str) -> Dict[str, Any]:
 
 
 def main():
-    """Entry point: sweep over ACTIVATIONS and RUNS (seeded from SEED0)."""
     mkdir(DATA_ROOT)
     mkdir(OUT_ROOT)
 
@@ -558,7 +461,6 @@ def main():
         "num_workers": NUM_WORKERS,
         "runs": RUNS,
         "seed0": SEED0,
-        "rational_lr_mult": float(RATIONAL_LR_MULT),
     }
     print("Config:", json.dumps(config, indent=2))
 
@@ -587,7 +489,6 @@ def main():
             "activation": activation,
             "runs": RUNS,
             "seed0": SEED0,
-            "rational_lr_mult": float(RATIONAL_LR_MULT),
             "best_test_acc_mean": mean,
             "best_test_acc_std": std,
             "per_run": results,
